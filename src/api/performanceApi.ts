@@ -44,3 +44,27 @@ export const fetchPerformanceAddress = async (mt20id: string) => {
     return null;
   }
 };
+
+export const REGIONS = [
+  { label: '전체 지역', value: '' },
+  { label: '서울', value: '11' },
+  { label: '경기', value: '41' },
+  { label: '인천', value: '28' },
+  { label: '부산', value: '26' },
+  { label: '대구', value: '27' },
+  { label: '대전', value: '30' },
+  { label: '광주', value: '29' },
+];
+
+export const CATEGORIES = [
+  { label: '뮤지컬', value: 'GGGA' },
+  { label: '연극', value: 'AAAA' },
+  { label: '클래식', value: 'CCCA' },
+  { label: '무용', value: 'BBBA' },
+];
+
+export const SORT_OPTIONS = [
+  { label: '날짜 오름차순', value: 'ASC' },
+  { label: '날짜 내림차순', value: 'DESC' },
+];
+
