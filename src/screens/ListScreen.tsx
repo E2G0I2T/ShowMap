@@ -10,7 +10,7 @@ import {
   ActivityIndicator,
   Modal,
   SafeAreaView,
-  Platform,
+  Alert, // 💡 경고창 추가
 } from "react-native";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import {
@@ -27,31 +27,25 @@ export default function ListScreen({ navigation }: any) {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
 
-  // 필터 상태
   const [category, setCategory] = useState(CATEGORIES[1]);
   const [region, setRegion] = useState(REGIONS[0]);
   const [sortOrder, setSortOrder] = useState(SORT_OPTIONS[0]);
 
-  // 날짜 상태
   const [startDate, setStartDate] = useState(new Date());
   const [endDate, setEndDate] = useState(
-    new Date(new Date().setMonth(new Date().getMonth() + 1)),
+    new Date(new Date().getTime() + 7 * 24 * 60 * 60 * 1000), // 💡 초기값도 1주일로 설정
   );
 
-  // 모달 제어
   const [modalVisible, setModalVisible] = useState(false);
   const [activeFilterType, setActiveFilterType] = useState<
     "CATE" | "REGION" | "SORT" | "DATE" | null
   >(null);
   const [showPicker, setShowPicker] = useState<"START" | "END" | null>(null);
 
-  // 날짜 포맷팅 함수들
   const formatDateForApi = (date: Date) =>
     date.toISOString().split("T")[0].replace(/-/g, "");
   const formatDateForUI = (date: Date) =>
     `${date.getMonth() + 1}/${date.getDate()}`;
-  const dateToNumber = (dateStr: string) =>
-    parseInt(dateStr.replace(/\./g, ""), 10);
 
   const loadData = async (resetPage = false) => {
     const targetPage = resetPage ? 1 : page;
@@ -59,7 +53,6 @@ export default function ListScreen({ navigation }: any) {
 
     setLoading(true);
 
-    // 1. 사용자 선택 날짜 숫자로 변환
     const userStartNum = safeDateToNumber(formatDateForApi(startDate));
     const userEndNum = safeDateToNumber(formatDateForApi(endDate));
 
@@ -72,48 +65,74 @@ export default function ListScreen({ navigation }: any) {
       eddate: formatDateForApi(endDate),
     };
 
-    const rawData = await fetchPerformances(params);
+    try {
+      const rawData = await fetchPerformances(params);
 
-    // 2. 엄격한 필터링 실행
-    const filtered = rawData.filter((item: any) => {
-      const perfStart = safeDateToNumber(item.prfpdfrom);
-      const perfEnd = safeDateToNumber(item.prfpdto);
-
-      const isMatch = isDateOverlapping(
-        userStartNum,
-        userEndNum,
-        perfStart,
-        perfEnd,
-      );
-
-      // 🔍 디버깅 로그: 필터링되는 모든 과정을 터미널에 표 형태로 출력합니다.
-      if (!isMatch) {
-        console.log(
-          `[제외됨] ${item.prfnm}: 공연(${perfStart}~${perfEnd}) vs 필터(${userStartNum}~${userEndNum})`,
+      // 1. 날짜 중첩 및 검색어 필터링
+      const filtered = rawData.filter((item: any) => {
+        const perfStart = safeDateToNumber(item.prfpdfrom);
+        const perfEnd = safeDateToNumber(item.prfpdto);
+        const isDateMatch = isDateOverlapping(
+          userStartNum,
+          userEndNum,
+          perfStart,
+          perfEnd,
         );
-      }
+        const isSearchMatch =
+          search.trim() === ""
+            ? true
+            : item.prfnm.toLowerCase().includes(search.toLowerCase());
+        return isDateMatch && isSearchMatch;
+      });
 
-      return isMatch;
-    });
+      // 2. 정렬 로직
+      filtered.sort((a: any, b: any) => {
+        const valA = safeDateToNumber(a.prfpdfrom);
+        const valB = safeDateToNumber(b.prfpdfrom);
+        return sortOrder.value === "ASC" ? valA - valB : valB - valA;
+      });
 
-    // 3. 정렬 (날짜 기반 오름차순/내림차순)
-    filtered.sort((a: any, b: any) => {
-      const valA = safeDateToNumber(a.prfpdfrom);
-      const valB = safeDateToNumber(b.prfpdfrom);
-      return sortOrder.value === "ASC" ? valA - valB : valB - valA;
-    });
-
-    setPerformances(filtered);
-    setLoading(false);
+      // 💡 3. 한 페이지 20개 제한
+      setPerformances(filtered.slice(0, 20));
+    } catch (error) {
+      console.error(error);
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
     loadData();
   }, [page, category, region, startDate, endDate, sortOrder]);
 
+  // 💡 날짜 변경 시 1주일 제한 체크 로직
+  const handleDateChange = (selectedDate: Date) => {
+    if (showPicker === "START") {
+      setStartDate(selectedDate);
+      // 시작일이 바뀌면 종료일도 자동으로 시작일+7일로 조정 (UX 편의)
+      const newEnd = new Date(selectedDate.getTime() + 7 * 24 * 60 * 60 * 1000);
+      setEndDate(newEnd);
+    } else {
+      const diffTime = selectedDate.getTime() - startDate.getTime();
+      const diffDays = diffTime / (1000 * 3600 * 24);
+
+      if (diffDays < 0) {
+        Alert.alert("알림", "종료일은 시작일보다 빠를 수 없습니다.");
+      } else if (diffDays > 7) {
+        Alert.alert("기간 제한", "최대 1주일까지만 조회가 가능합니다.");
+        const limitDate = new Date(
+          startDate.getTime() + 7 * 24 * 60 * 60 * 1000,
+        );
+        setEndDate(limitDate);
+      } else {
+        setEndDate(selectedDate);
+      }
+    }
+    setShowPicker(null);
+  };
+
   return (
     <SafeAreaView style={styles.container}>
-      {/* 검색창 */}
       <View style={styles.searchContainer}>
         <TextInput
           style={styles.searchInput}
@@ -124,7 +143,6 @@ export default function ListScreen({ navigation }: any) {
         />
       </View>
 
-      {/* 필터바 */}
       <View style={{ height: 50 }}>
         <FlatList
           horizontal
@@ -133,10 +151,9 @@ export default function ListScreen({ navigation }: any) {
             { type: "CATE", label: category.label },
             { type: "REGION", label: region.label },
             { type: "SORT", label: sortOrder.label },
-            // 💡 필터 라벨 수정: a ~ b 형태로 표시
             {
               type: "DATE",
-              label: `${formatDateForUI(startDate)} ~ ${formatDateForUI(endDate)}`,
+              label: `${formatDateForUI(startDate)} ~ ${formatDateForUI(endDate)} (최대 7일)`,
             },
           ]}
           contentContainerStyle={styles.filterBar}
@@ -154,51 +171,57 @@ export default function ListScreen({ navigation }: any) {
         />
       </View>
 
-      {/* 리스트 렌더링 생략 (기본 동일) */}
       {loading ? (
         <ActivityIndicator size="large" style={{ flex: 1 }} color="#007AFF" />
       ) : (
-        <FlatList
-          data={performances}
-          keyExtractor={(item) => item.mt20id}
-          renderItem={({ item }) => (
-            <TouchableOpacity
-              style={styles.card}
-              onPress={() => navigation.navigate("Detail", { item })}
-            >
-              <Image source={{ uri: item.poster }} style={styles.poster} />
-              <View style={styles.info}>
-                <Text style={styles.title} numberOfLines={1}>
-                  {item.prfnm}
-                </Text>
-                <Text style={styles.venue}>{item.fcltynm}</Text>
-                <Text style={styles.date}>
-                  {item.prfpdfrom} ~ {item.prfpdto}
-                </Text>
-              </View>
-            </TouchableOpacity>
-          )}
-          ListFooterComponent={() => (
-            <View style={styles.pagination}>
+        <View style={{ flex: 1 }}>
+          <FlatList
+            data={performances}
+            keyExtractor={(item) => item.mt20id}
+            renderItem={({ item }) => (
               <TouchableOpacity
-                onPress={() => setPage((p) => Math.max(1, p - 1))}
-                style={styles.pageBtn}
+                style={styles.card}
+                onPress={() => navigation.navigate("Detail", { item })}
               >
-                <Text>이전</Text>
+                <Image source={{ uri: item.poster }} style={styles.poster} />
+                <View style={styles.info}>
+                  <Text style={styles.title} numberOfLines={1}>
+                    {item.prfnm}
+                  </Text>
+                  <Text style={styles.venue}>{item.fcltynm}</Text>
+                  <Text style={styles.date}>
+                    {item.prfpdfrom} ~ {item.prfpdto}
+                  </Text>
+                </View>
               </TouchableOpacity>
-              <Text style={styles.pageText}>{page} 페이지</Text>
-              <TouchableOpacity
-                onPress={() => setPage((p) => p + 1)}
-                style={styles.pageBtn}
-              >
-                <Text>다음</Text>
-              </TouchableOpacity>
-            </View>
-          )}
-        />
+            )}
+            // 💡 리스트 하단 컴포넌트
+            ListFooterComponent={() =>
+              performances.length > 0 ? (
+                <View style={styles.pagination}>
+                  <TouchableOpacity
+                    onPress={() => setPage((p) => Math.max(1, p - 1))}
+                    style={styles.pageBtn}
+                  >
+                    <Text style={styles.pageBtnText}>이전</Text>
+                  </TouchableOpacity>
+                  <Text style={styles.pageText}>{page} 페이지</Text>
+                  <TouchableOpacity
+                    onPress={() => setPage((p) => p + 1)}
+                    style={styles.pageBtn}
+                  >
+                    <Text style={styles.pageBtnText}>다음</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : null
+            }
+            // 💡 리스트 자체의 하단 내적 여백은 없애거나 줄여서 버튼이 더 올라오게 합니다.
+            contentContainerStyle={{ paddingBottom: 0 }}
+          />
+        </View>
       )}
 
-      {/* 통합 필터 선택 모달 */}
+      {/* 모달 로직 */}
       <Modal visible={modalVisible} transparent animationType="slide">
         <TouchableOpacity
           style={styles.modalOverlay}
@@ -206,10 +229,9 @@ export default function ListScreen({ navigation }: any) {
           onPress={() => setModalVisible(false)}
         >
           <View style={styles.modalContent}>
-            {/* 💡 날짜 선택 전용 UX 고도화 */}
             {activeFilterType === "DATE" ? (
               <View>
-                <Text style={styles.modalTitle}>공연 기간 설정</Text>
+                <Text style={styles.modalTitle}>공연 기간 설정 (최대 7일)</Text>
                 <View style={styles.dateSelectionRow}>
                   <TouchableOpacity
                     style={styles.datePickerBtn}
@@ -238,11 +260,10 @@ export default function ListScreen({ navigation }: any) {
                     setPage(1);
                   }}
                 >
-                  <Text style={styles.applyBtnText}>이 기간으로 검색</Text>
+                  <Text style={styles.applyBtnText}>조회하기</Text>
                 </TouchableOpacity>
               </View>
             ) : (
-              /* 일반 필터 (장르, 지역, 정렬) */
               <View>
                 <Text style={styles.modalTitle}>항목 선택</Text>
                 <FlatList
@@ -274,18 +295,11 @@ export default function ListScreen({ navigation }: any) {
         </TouchableOpacity>
       </Modal>
 
-      {/* 실제 캘린더 피커 (모달 위에 뜸) */}
       {showPicker && (
         <DateTimePicker
           value={showPicker === "START" ? startDate : endDate}
           mode="date"
-          onChange={(e, d) => {
-            setShowPicker(null); // 피커만 닫고 모달은 유지
-            if (d) {
-              if (showPicker === "START") setStartDate(d);
-              else setEndDate(d);
-            }
-          }}
+          onChange={(e, d) => d && handleDateChange(d)}
         />
       )}
     </SafeAreaView>
@@ -294,18 +308,16 @@ export default function ListScreen({ navigation }: any) {
 
 const safeDateToNumber = (dateStr: any): number => {
   if (!dateStr) return 0;
-  // 숫자 이외의 모든 문자(점, 대시, 공백)를 제거
-  const cleaned = String(dateStr).replace(/[^0-9]/g, '');
+  const cleaned = String(dateStr).replace(/[^0-9]/g, "");
   return parseInt(cleaned, 10);
 };
 
-/**
- * 💡 기간 중첩 공식 (Strict Overlap)
- * 사용자가 선택한 [uStart, uEnd]와 공연 기간 [pStart, pEnd]가 
- * 하루라도 겹치는지 확인하는 수학적 공식입니다.
- */
-const isDateOverlapping = (uStart: number, uEnd: number, pStart: number, pEnd: number) => {
-  // 조건: (공연 시작일이 사용자 종료일보다 작거나 같음) AND (공연 종료일이 사용자 시작일보다 크거나 같음)
+const isDateOverlapping = (
+  uStart: number,
+  uEnd: number,
+  pStart: number,
+  pEnd: number,
+) => {
   return pStart <= uEnd && pEnd >= uStart;
 };
 
@@ -340,15 +352,31 @@ const styles = StyleSheet.create({
   title: { fontWeight: "bold", fontSize: 16, color: "#222" },
   venue: { color: "#666", fontSize: 14, marginTop: 4 },
   date: { color: "#007AFF", fontSize: 12, marginTop: 4, fontWeight: "500" },
-  pagination: {
-    flexDirection: "row",
-    justifyContent: "center",
-    padding: 25,
-    alignItems: "center",
+  pagination: { 
+    flexDirection: "row", 
+    justifyContent: "center", 
+    alignItems: "center", 
+    backgroundColor: '#fff',
+    // 💡 아래 여백을 대폭 늘려 버튼을 위로 밀어 올립니다.
+    paddingTop: 30,      // 버튼 위쪽 여백
+    paddingBottom: 80,   // 버튼 아래쪽 여백 (이 수치를 높일수록 버튼이 위로 올라갑니다)
   },
-  pageBtn: { padding: 10, backgroundColor: "#f2f2f2", borderRadius: 8 },
-  pageText: { marginHorizontal: 20, fontWeight: "bold" },
-  // 모달 스타일
+  pageBtn: { 
+    paddingVertical: 10, 
+    paddingHorizontal: 20, 
+    backgroundColor: "#007AFF", // 💡 포인트를 주기 위해 색상 변경 가능
+    borderRadius: 10,
+  },
+  pageBtnText: {
+    color: "#fff",
+    fontWeight: "600",
+  },
+  pageText: { 
+    marginHorizontal: 25, 
+    fontWeight: "bold",
+    fontSize: 16,
+    color: "#333",
+  },
   modalOverlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.5)",
@@ -373,7 +401,6 @@ const styles = StyleSheet.create({
     borderBottomColor: "#f0f0f0",
   },
   modalItemText: { fontSize: 16, textAlign: "center" },
-  // 날짜 전용 스타일
   dateSelectionRow: {
     flexDirection: "row",
     alignItems: "center",
