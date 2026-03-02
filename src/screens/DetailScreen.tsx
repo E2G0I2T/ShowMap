@@ -10,8 +10,9 @@ import {
   Modal,
   FlatList,
   Linking,
+  Platform,
 } from "react-native";
-import MapView, { Marker, PROVIDER_GOOGLE } from "react-native-maps";
+import ShowMapView from "../components/ShowMapView";
 import { SafeAreaView } from "react-native-safe-area-context";
 import * as Location from "expo-location";
 import { fetchPerformanceDetail } from "../api/performanceApi";
@@ -141,14 +142,23 @@ export default function DetailScreen({ route }: any) {
         const perfData = await fetchPerformanceDetail(item.mt20id);
         setDetail(perfData);
 
-        // 📍 지오코딩: 장소명 → 좌표
-        console.log(
-          "🏢 KOPIS 데이터 - area:",
-          item.area,
-          "/ fcltynm:",
-          item.fcltynm,
-        );
+        // 📍 웹에서는 기본 주소만 표시하고 지오코딩 생략
+        if (Platform.OS === "web") {
+          setOfficialAddress(
+            item.area ? `${item.area} - ${item.fcltynm}` : item.fcltynm,
+          );
+          // 웹에서는 기본 좌표 사용 (서울시청 예시)
+          setCoords({
+            latitude: 37.5665,
+            longitude: 126.978,
+            latitudeDelta: 0.005,
+            longitudeDelta: 0.005,
+          });
+          setLoading(false);
+          return; // 웹에서는 여기서 종료
+        }
 
+        // 앱에서만 지오코딩 실행
         const geo = await Location.geocodeAsync(`${item.area} ${item.fcltynm}`);
         if (geo.length > 0) {
           const { latitude, longitude } = geo[0];
@@ -159,7 +169,6 @@ export default function DetailScreen({ route }: any) {
             longitudeDelta: 0.005,
           });
 
-          // 📍 역지오코딩: 좌표 → 주소
           const revGeo = await Location.reverseGeocodeAsync({
             latitude,
             longitude,
@@ -238,7 +247,9 @@ export default function DetailScreen({ route }: any) {
         }
       } catch (e) {
         console.error("주소 조회 오류:", e);
-        setOfficialAddress("주소 조회 실패");
+        setOfficialAddress(
+          item.area ? `${item.area} - ${item.fcltynm}` : item.fcltynm,
+        );
       } finally {
         setLoading(false);
       }
@@ -267,84 +278,140 @@ export default function DetailScreen({ route }: any) {
     }
   };
 
+  const renderContent = () => (
+    <>
+      {/* 앱에서만 투명 여백 추가, 웹에서는 제거 */}
+      {Platform.OS !== "web" && <View style={{ height: POSTER_HEIGHT - 10 }} />}
+
+      <View style={styles.contentBox}>
+        <View style={styles.handleBar} />
+        <Text style={styles.title}>{item.prfnm}</Text>
+
+        <View style={styles.infoSection}>
+          <Text style={styles.infoText}>📍 장소: {item.fcltynm}</Text>
+          <Text style={styles.infoText}>
+            📅 기간: {item.prfpdfrom} ~ {item.prfpdto}
+          </Text>
+          {item.genrenm && (
+            <Text style={styles.infoText}>🎭 장르: {item.genrenm}</Text>
+          )}
+          {detail?.prfcast && detail.prfcast.trim() !== "" && (
+            <Text style={styles.infoText}>👥 출연진: {detail.prfcast}</Text>
+          )}
+          {detail?.pcseguidance && (
+            <Text style={styles.infoText}>💰 가격: {detail.pcseguidance}</Text>
+          )}
+          {detail?.dtlsvc && (
+            <Text style={styles.infoText}>🕒 시간: {detail.dtlsvc}</Text>
+          )}
+        </View>
+
+        <Text style={styles.sectionTitle}>찾아오시는 길</Text>
+
+        <View style={styles.mapWrapper}>
+          {Platform.OS === "web" ? (
+            // 웹: 주소로 검색
+            <ShowMapView
+              address={`${item.area} ${item.fcltynm}`}
+              title={item.fcltynm}
+            />
+          ) : // 앱: 좌표 사용
+          coords ? (
+            <ShowMapView coords={coords} title={item.fcltynm} />
+          ) : (
+            <View style={styles.mapPlaceholder}>
+              <ActivityIndicator size="small" color="#007AFF" />
+              <Text style={{ marginTop: 10, color: "#999", fontSize: 13 }}>
+                지도를 불러오는 중...
+              </Text>
+            </View>
+          )}
+        </View>
+
+        <View style={styles.addressBox}>
+          <Text style={styles.addressLabel}>공연장 주소</Text>
+          <Text style={styles.addressText}>{officialAddress}</Text>
+        </View>
+      </View>
+    </>
+  );
+
+  const webScrollStyle =
+    Platform.OS === "web"
+      ? {
+          position: "absolute" as any,
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          overflowY: "auto" as any,
+        }
+      : { flex: 1 };
+
   return (
     <View style={styles.container}>
-      {/* 포스터 이미지 섹션 */}
-      <Animated.Image
-        source={{ uri: item.poster }}
-        style={[
-          styles.fixedPoster,
-          { transform: [{ translateY: posterTranslateY }] },
-        ]}
-        resizeMode="cover"
-      />
-
-      <Animated.ScrollView
-        onScroll={Animated.event(
-          [{ nativeEvent: { contentOffset: { y: scrollY } } }],
-          { useNativeDriver: true },
+      {/* 포스터 */}
+      <View pointerEvents="none" style={styles.fixedPoster}>
+        {Platform.OS === "web" ? (
+          <div
+            style={{
+              width: "100%",
+              height: "100%",
+              display: "flex",
+              alignItems: "flex-start",
+              justifyContent: "center",
+              backgroundColor: "#000", // 배경색
+            }}
+          >
+            <img
+              src={item.poster}
+              style={{
+                width: "100%",
+                height: "auto",
+                maxHeight: "100%",
+                objectFit: "contain",
+              }}
+              alt="poster"
+            />
+          </div>
+        ) : (
+          <Animated.Image
+            source={{ uri: item.poster }}
+            style={[
+              styles.posterImage,
+              { transform: [{ translateY: posterTranslateY }] },
+            ]}
+            resizeMode="contain" // cover → contain으로 변경
+          />
         )}
-        scrollEventThrottle={16}
-      >
-        <View style={{ height: POSTER_HEIGHT - 40 }} />
-        <View style={styles.contentBox}>
-          <View style={styles.handleBar} />
+      </View>
 
-          <Text style={styles.title}>{item.prfnm}</Text>
-
-          {/* 📋 공연 상세 정보 섹션 보강 */}
-          <View style={styles.infoSection}>
-            <Text style={styles.infoText}>📍 장소: {item.fcltynm}</Text>
-            <Text style={styles.infoText}>
-              📅 기간: {item.prfpdfrom} ~ {item.prfpdto}
-            </Text>
-
-            {/* 💡 추가된 항목들 */}
-            {item.genrenm && (
-              <Text style={styles.infoText}>🎭 장르: {item.genrenm}</Text>
-            )}
-
-            {detail?.prfcast && detail.prfcast.trim() !== "" && (
-              <Text style={styles.infoText}>👥 출연진: {detail.prfcast}</Text>
-            )}
-
-            {detail?.pcseguidance && (
-              <Text style={styles.infoText}>
-                💰 가격: {detail.pcseguidance}
-              </Text>
-            )}
-
-            {detail?.dtlsvc && (
-              <Text style={styles.infoText}>🕒 시간: {detail.dtlsvc}</Text>
-            )}
-          </View>
-
-          <Text style={styles.sectionTitle}>찾아오시는 길</Text>
-          <View style={styles.mapContainer}>
-            {coords && (
-              <MapView
-                style={styles.map}
-                provider={PROVIDER_GOOGLE}
-                initialRegion={coords}
-                scrollEnabled={false}
-              >
-                <Marker coordinate={coords} title={item.fcltynm} />
-              </MapView>
-            )}
-          </View>
-          <View style={styles.addressBox}>
-            <Text style={styles.addressLabel}>공연장 주소</Text>
-            <Text style={styles.addressText}>{officialAddress}</Text>
-          </View>
-          <View style={{ height: 150 }} />
+      {/* 스크롤 영역 */}
+      {Platform.OS === "web" ? (
+        <View style={webScrollStyle}>
+          <View style={{ height: POSTER_HEIGHT - 10 }} />
+          {renderContent()}
+          <View style={{ height: 120 }} />
         </View>
-      </Animated.ScrollView>
+      ) : (
+        <Animated.ScrollView
+          style={{ flex: 1 }}
+          onScroll={Animated.event(
+            [{ nativeEvent: { contentOffset: { y: scrollY } } }],
+            { useNativeDriver: true },
+          )}
+          scrollEventThrottle={16}
+          contentContainerStyle={{ paddingBottom: 120 }}
+        >
+          {renderContent()}
+        </Animated.ScrollView>
+      )}
+
       {!loading && detail?.relatesList?.length > 0 && (
         <SafeAreaView edges={["bottom"]} style={styles.bottomBar}>
           <TouchableOpacity
             style={styles.mainReserveBtn}
             onPress={() => {
-              // 예매처가 하나면 바로 이동, 여러 개면 모달 띄우기
               if (detail.relatesList.length === 1) {
                 openReservation(detail.relatesList[0].relateurl);
               } else {
@@ -361,7 +428,6 @@ export default function DetailScreen({ route }: any) {
         </SafeAreaView>
       )}
 
-      {/* 💡 다중 예매처 선택 모달 */}
       <Modal visible={reserveModalVisible} transparent animationType="slide">
         <TouchableOpacity
           style={styles.modalOverlay}
@@ -395,18 +461,58 @@ export default function DetailScreen({ route }: any) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#000" },
+  container: {
+    flex: 1,
+    backgroundColor: "#fff",
+  },
   fixedPoster: {
     position: "absolute",
     width: width,
     height: POSTER_HEIGHT,
     top: 0,
+    left: 0,
+    zIndex: 0,
+  },
+  posterImage: {
+    width: "100%",
+    height: "100%",
   },
   contentBox: {
     backgroundColor: "#fff",
     borderTopLeftRadius: 30,
     borderTopRightRadius: 30,
     padding: 20,
+    ...Platform.select({
+      web: {
+        minHeight: "100vh" as any,
+      },
+    }),
+  },
+  mapWrapper: {
+    width: "100%",
+    height: 250,
+    borderRadius: 15,
+    overflow: "hidden",
+    backgroundColor: "#f0f0f0",
+    marginBottom: 15,
+  },
+  mapPlaceholder: {
+    width: "100%",
+    height: "100%",
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "#f0f0f0",
+  },
+  bottomBar: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: "#fff",
+    borderTopWidth: 1,
+    borderTopColor: "#eee",
+    paddingTop: 10,
+    zIndex: 10,
   },
   handleBar: {
     width: 40,
@@ -430,13 +536,6 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     color: "#333",
   },
-  mapContainer: {
-    height: 200,
-    borderRadius: 15,
-    overflow: "hidden",
-    backgroundColor: "#f0f0f0",
-  },
-  map: { width: "100%", height: "100%" },
   addressBox: {
     marginTop: 12,
     padding: 15,
@@ -450,25 +549,21 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   addressText: { color: "#333", fontSize: 14, lineHeight: 20 },
-  bottomBar: {
-    position: "absolute",
-    bottom: 0,
-    width: "100%",
-    backgroundColor: "rgba(255,255,255,0.95)",
-    borderTopWidth: 1,
-    borderTopColor: "#eee",
-  },
   mainReserveBtn: {
     backgroundColor: "#007AFF",
     margin: 15,
+    marginBottom: Platform.OS === "web" ? 15 : 0, // 웹에서만 하단 여백
     padding: 18,
     borderRadius: 15,
     alignItems: "center",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    ...Platform.select({
+      web: {
+        boxShadow: "0px 2px 4px rgba(0,0,0,0.1)" as any,
+      },
+      default: {
+        elevation: 3,
+      },
+    }),
   },
   reserveBtnText: { color: "#fff", fontSize: 17, fontWeight: "bold" },
   modalOverlay: {
@@ -481,8 +576,6 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 30,
     borderTopRightRadius: 30,
     padding: 20,
-    paddingBottom: 40,
-    alignItems: "center",
     maxHeight: height * 0.7,
   },
   modalBar: {
@@ -490,16 +583,21 @@ const styles = StyleSheet.create({
     height: 5,
     backgroundColor: "#ddd",
     borderRadius: 10,
+    alignSelf: "center",
     marginBottom: 15,
   },
-  modalTitle: { fontSize: 18, fontWeight: "bold", marginBottom: 20 },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: "bold",
+    textAlign: "center",
+    marginBottom: 20,
+  },
   reserveItem: {
     flexDirection: "row",
     justifyContent: "space-between",
     paddingVertical: 20,
     borderBottomWidth: 1,
     borderBottomColor: "#f0f0f0",
-    width: "100%",
   },
   reserveItemText: { fontSize: 16, color: "#333" },
 });

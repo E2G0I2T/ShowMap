@@ -10,7 +10,9 @@ import {
   ActivityIndicator,
   Modal,
   SafeAreaView,
-  Alert, // 💡 경고창 추가
+  Alert,
+  Dimensions,
+  Platform,
 } from "react-native";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import {
@@ -25,7 +27,9 @@ export default function ListScreen({ navigation }: any) {
   const [loading, setLoading] = useState(false);
   const [performances, setPerformances] = useState<any[]>([]);
   const [page, setPage] = useState(1);
+  const [hasNextPage, setHasNextPage] = useState(true);
   const [search, setSearch] = useState("");
+  const Container = Platform.OS === "web" ? View : SafeAreaView;
 
   const [category, setCategory] = useState(CATEGORIES[1]);
   const [region, setRegion] = useState(REGIONS[0]);
@@ -33,7 +37,7 @@ export default function ListScreen({ navigation }: any) {
 
   const [startDate, setStartDate] = useState(new Date());
   const [endDate, setEndDate] = useState(
-    new Date(new Date().getTime() + 7 * 24 * 60 * 60 * 1000), // 💡 초기값도 1주일로 설정
+    new Date(new Date().getTime() + 7 * 24 * 60 * 60 * 1000),
   );
 
   const [modalVisible, setModalVisible] = useState(false);
@@ -42,88 +46,103 @@ export default function ListScreen({ navigation }: any) {
   >(null);
   const [showPicker, setShowPicker] = useState<"START" | "END" | null>(null);
 
+  const [screenWidth, setScreenWidth] = useState(
+    Dimensions.get("window").width,
+  );
+  const numColumns = screenWidth > 768 ? 2 : 1;
+
+  useEffect(() => {
+    const subscription = Dimensions.addEventListener("change", ({ window }) => {
+      setScreenWidth(window.width);
+    });
+    return () => subscription?.remove();
+  }, []);
+
   const formatDateForApi = (date: Date) =>
     date.toISOString().split("T")[0].replace(/-/g, "");
   const formatDateForUI = (date: Date) =>
     `${date.getMonth() + 1}/${date.getDate()}`;
 
   const loadData = async (resetPage = false) => {
-    const targetPage = resetPage ? 1 : page;
-    if (resetPage) setPage(1);
+  const targetPage = resetPage ? 1 : page;
+  if (resetPage) setPage(1);
+  setLoading(true);
 
-    setLoading(true);
+  const userStartNum = safeDateToNumber(formatDateForApi(startDate));
+  const userEndNum = safeDateToNumber(formatDateForApi(endDate));
 
-    const userStartNum = safeDateToNumber(formatDateForApi(startDate));
-    const userEndNum = safeDateToNumber(formatDateForApi(endDate));
-
-    const params: FetchParams = {
-      cpage: targetPage,
-      shcate: category.value,
-      shnm: search,
-      signgucode: region.value,
-      stdate: formatDateForApi(startDate),
-      eddate: formatDateForApi(endDate),
-    };
-
-    try {
-      const rawData = await fetchPerformances(params);
-
-      // 1. 날짜 중첩 및 검색어 필터링
-      const filtered = rawData.filter((item: any) => {
-        const perfStart = safeDateToNumber(item.prfpdfrom);
-        const perfEnd = safeDateToNumber(item.prfpdto);
-        const isDateMatch = isDateOverlapping(
-          userStartNum,
-          userEndNum,
-          perfStart,
-          perfEnd,
-        );
-        const isSearchMatch =
-          search.trim() === ""
-            ? true
-            : item.prfnm.toLowerCase().includes(search.toLowerCase());
-        return isDateMatch && isSearchMatch;
-      });
-
-      // 2. 정렬 로직
-      filtered.sort((a: any, b: any) => {
-        const valA = safeDateToNumber(a.prfpdfrom);
-        const valB = safeDateToNumber(b.prfpdfrom);
-        return sortOrder.value === "ASC" ? valA - valB : valB - valA;
-      });
-
-      // 💡 3. 한 페이지 20개 제한
-      setPerformances(filtered.slice(0, 20));
-    } catch (error) {
-      console.error(error);
-    } finally {
-      setLoading(false);
-    }
+  const params: FetchParams = {
+    cpage: targetPage,
+    shcate: category.value,
+    shnm: search,
+    signgucode: region.value,
+    stdate: formatDateForApi(startDate),
+    eddate: formatDateForApi(endDate),
   };
+
+  try {
+    const rawData = await fetchPerformances(params);
+    const filtered = rawData.filter((item: any) => {
+      const perfStart = safeDateToNumber(item.prfpdfrom);
+      const perfEnd = safeDateToNumber(item.prfpdto);
+      const isDateMatch = isDateOverlapping(
+        userStartNum,
+        userEndNum,
+        perfStart,
+        perfEnd,
+      );
+      const isSearchMatch =
+        search.trim() === ""
+          ? true
+          : item.prfnm.toLowerCase().includes(search.toLowerCase());
+      return isDateMatch && isSearchMatch;
+    });
+
+    filtered.sort((a: any, b: any) => {
+      const valA = safeDateToNumber(a.prfpdfrom);
+      const valB = safeDateToNumber(b.prfpdfrom);
+      return sortOrder.value === "ASC" ? valA - valB : valB - valA;
+    });
+
+    // 🔥 21개를 가져와서 다음 페이지 존재 여부 확인
+    const displayData = filtered.slice(0, 21);
+    
+    // 21개가 있으면 다음 페이지 존재
+    const hasMore = displayData.length > 20;
+    setHasNextPage(hasMore);
+    
+    // 실제로는 20개만 표시
+    setPerformances(displayData.slice(0, 20));
+    
+  } catch (error) {
+    console.error(error);
+    setHasNextPage(false);
+  } finally {
+    setLoading(false);
+  }
+};
 
   useEffect(() => {
     loadData();
   }, [page, category, region, startDate, endDate, sortOrder]);
 
-  // 💡 날짜 변경 시 1주일 제한 체크 로직
   const handleDateChange = (selectedDate: Date) => {
     if (showPicker === "START") {
       setStartDate(selectedDate);
-      // 시작일이 바뀌면 종료일도 자동으로 시작일+7일로 조정 (UX 편의)
       const newEnd = new Date(selectedDate.getTime() + 7 * 24 * 60 * 60 * 1000);
       setEndDate(newEnd);
     } else {
-      const diffTime = selectedDate.getTime() - startDate.getTime();
-      const diffDays = diffTime / (1000 * 3600 * 24);
-
+      const diffDays =
+        (selectedDate.getTime() - startDate.getTime()) / (1000 * 3600 * 24);
       if (diffDays < 0) {
-        Alert.alert("알림", "종료일은 시작일보다 빠를 수 없습니다.");
+        Platform.OS === "web"
+          ? alert("종료일은 시작일보다 빠를 수 없습니다.")
+          : Alert.alert("알림", "종료일은 시작일보다 빠를 수 없습니다.");
       } else if (diffDays > 7) {
-        Alert.alert("기간 제한", "최대 1주일까지만 조회가 가능합니다.");
-        const limitDate = new Date(
-          startDate.getTime() + 7 * 24 * 60 * 60 * 1000,
-        );
-        setEndDate(limitDate);
+        Platform.OS === "web"
+          ? alert("최대 1주일까지만 조회가 가능합니다.")
+          : Alert.alert("기간 제한", "최대 1주일까지만 조회가 가능합니다.");
+        setEndDate(new Date(startDate.getTime() + 7 * 24 * 60 * 60 * 1000));
       } else {
         setEndDate(selectedDate);
       }
@@ -131,8 +150,20 @@ export default function ListScreen({ navigation }: any) {
     setShowPicker(null);
   };
 
+  const webContainerStyle =
+    Platform.OS === "web"
+      ? {
+          position: "absolute" as any,
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          overflow: "auto" as any,
+        }
+      : {};
+
   return (
-    <SafeAreaView style={styles.container}>
+    <Container style={[styles.container, webContainerStyle]}>
       <View style={styles.searchContainer}>
         <TextInput
           style={styles.searchInput}
@@ -173,14 +204,25 @@ export default function ListScreen({ navigation }: any) {
 
       {loading ? (
         <ActivityIndicator size="large" style={{ flex: 1 }} color="#007AFF" />
-      ) : (
-        <View style={{ flex: 1 }}>
-          <FlatList
-            data={performances}
-            keyExtractor={(item) => item.mt20id}
-            renderItem={({ item }) => (
+      ) : Platform.OS === "web" ? (
+        <View style={{ flex: 1, width: "100%" }}>
+          <View
+            style={{
+              flexDirection: numColumns > 1 ? "row" : "column",
+              flexWrap: numColumns > 1 ? "wrap" : "nowrap",
+            }}
+          >
+            {performances.map((item) => (
               <TouchableOpacity
-                style={styles.card}
+                key={item.mt20id}
+                style={[
+                  styles.card,
+                  numColumns > 1 && {
+                    width: screenWidth / 2 - 24,
+                    marginHorizontal: 8,
+                    borderBottomWidth: 1,
+                  },
+                ]}
                 onPress={() => navigation.navigate("Detail", { item })}
               >
                 <Image source={{ uri: item.poster }} style={styles.poster} />
@@ -194,34 +236,120 @@ export default function ListScreen({ navigation }: any) {
                   </Text>
                 </View>
               </TouchableOpacity>
-            )}
-            // 💡 리스트 하단 컴포넌트
-            ListFooterComponent={() =>
-              performances.length > 0 ? (
-                <View style={styles.pagination}>
-                  <TouchableOpacity
-                    onPress={() => setPage((p) => Math.max(1, p - 1))}
-                    style={styles.pageBtn}
-                  >
-                    <Text style={styles.pageBtnText}>이전</Text>
-                  </TouchableOpacity>
-                  <Text style={styles.pageText}>{page} 페이지</Text>
-                  <TouchableOpacity
-                    onPress={() => setPage((p) => p + 1)}
-                    style={styles.pageBtn}
-                  >
-                    <Text style={styles.pageBtnText}>다음</Text>
-                  </TouchableOpacity>
-                </View>
-              ) : null
-            }
-            // 💡 리스트 자체의 하단 내적 여백은 없애거나 줄여서 버튼이 더 올라오게 합니다.
-            contentContainerStyle={{ paddingBottom: 0 }}
-          />
+            ))}
+          </View>
+
+          {performances.length > 0 && (
+            <View style={styles.pagination}>
+              <TouchableOpacity
+                onPress={() => setPage((p) => Math.max(1, p - 1))}
+                style={[
+                  styles.pageBtn,
+                  page === 1 && styles.pageBtnDisabled, // 비활성 스타일
+                ]}
+                disabled={page === 1} // 첫 페이지에서 이전 버튼 비활성
+              >
+                <Text style={[
+                  styles.pageBtnText,
+                  page === 1 && styles.pageBtnTextDisabled
+                ]}>
+                  이전
+                </Text>
+              </TouchableOpacity>
+              
+              <Text style={styles.pageText}>{page} 페이지</Text>
+              
+              <TouchableOpacity
+                onPress={() => setPage((p) => p + 1)}
+                style={[
+                  styles.pageBtn,
+                  !hasNextPage && styles.pageBtnDisabled, // 🔥 비활성 스타일
+                ]}
+                disabled={!hasNextPage} // 🔥 다음 페이지 없으면 비활성
+              >
+                <Text style={[
+                  styles.pageBtnText,
+                  !hasNextPage && styles.pageBtnTextDisabled
+                ]}>
+                  다음
+                </Text>
+              </TouchableOpacity>
+            </View>
+          )}
         </View>
+      ) : (
+        <FlatList
+          data={performances}
+          keyExtractor={(item) => item.mt20id}
+          numColumns={numColumns}
+          key={`list-${numColumns}`}
+          contentContainerStyle={{ paddingBottom: 120 }}
+          renderItem={({ item }) => (
+            <TouchableOpacity
+              style={[
+                styles.card,
+                numColumns > 1 && {
+                  width: screenWidth / 2 - 24,
+                  marginHorizontal: 8,
+                  borderBottomWidth: 1,
+                },
+              ]}
+              onPress={() => navigation.navigate("Detail", { item })}
+            >
+              <Image source={{ uri: item.poster }} style={styles.poster} />
+              <View style={styles.info}>
+                <Text style={styles.title} numberOfLines={1}>
+                  {item.prfnm}
+                </Text>
+                <Text style={styles.venue}>{item.fcltynm}</Text>
+                <Text style={styles.date}>
+                  {item.prfpdfrom} ~ {item.prfpdto}
+                </Text>
+              </View>
+            </TouchableOpacity>
+          )}
+          ListFooterComponent={() =>
+            performances.length > 0 ? (
+              <View style={styles.pagination}>
+                <TouchableOpacity
+                  onPress={() => setPage((p) => Math.max(1, p - 1))}
+                  style={[
+                    styles.pageBtn,
+                    page === 1 && styles.pageBtnDisabled,
+                  ]}
+                  disabled={page === 1}
+                >
+                  <Text style={[
+                    styles.pageBtnText,
+                    page === 1 && styles.pageBtnTextDisabled
+                  ]}>
+                    이전
+                  </Text>
+                </TouchableOpacity>
+                
+                <Text style={styles.pageText}>{page} 페이지</Text>
+                
+                <TouchableOpacity
+                  onPress={() => setPage((p) => p + 1)}
+                  style={[
+                    styles.pageBtn,
+                    !hasNextPage && styles.pageBtnDisabled,
+                  ]}
+                  disabled={!hasNextPage}
+                >
+                  <Text style={[
+                    styles.pageBtnText,
+                    !hasNextPage && styles.pageBtnTextDisabled
+                  ]}>
+                    다음
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            ) : null
+          }
+        />
       )}
 
-      {/* 모달 로직 */}
       <Modal visible={modalVisible} transparent animationType="slide">
         <TouchableOpacity
           style={styles.modalOverlay}
@@ -302,7 +430,7 @@ export default function ListScreen({ navigation }: any) {
           onChange={(e, d) => d && handleDateChange(d)}
         />
       )}
-    </SafeAreaView>
+    </Container>
   );
 }
 
@@ -317,12 +445,13 @@ const isDateOverlapping = (
   uEnd: number,
   pStart: number,
   pEnd: number,
-) => {
-  return pStart <= uEnd && pEnd >= uStart;
-};
+) => pStart <= uEnd && pEnd >= uStart;
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#fff" },
+  container: {
+    flex: 1,
+    backgroundColor: "#fff",
+  },
   searchContainer: { padding: 16, paddingBottom: 8 },
   searchInput: {
     backgroundColor: "#f2f2f2",
@@ -352,27 +481,33 @@ const styles = StyleSheet.create({
   title: { fontWeight: "bold", fontSize: 16, color: "#222" },
   venue: { color: "#666", fontSize: 14, marginTop: 4 },
   date: { color: "#007AFF", fontSize: 12, marginTop: 4, fontWeight: "500" },
-  pagination: { 
-    flexDirection: "row", 
-    justifyContent: "center", 
-    alignItems: "center", 
-    backgroundColor: '#fff',
-    // 💡 아래 여백을 대폭 늘려 버튼을 위로 밀어 올립니다.
-    paddingTop: 30,      // 버튼 위쪽 여백
-    paddingBottom: 80,   // 버튼 아래쪽 여백 (이 수치를 높일수록 버튼이 위로 올라갑니다)
+  pagination: {
+    flexDirection: "row",
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "#fff",
+    paddingTop: 30,
+    paddingBottom: 40,
   },
-  pageBtn: { 
-    paddingVertical: 10, 
-    paddingHorizontal: 20, 
-    backgroundColor: "#007AFF", // 💡 포인트를 주기 위해 색상 변경 가능
+  pageBtn: {
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    backgroundColor: "#007AFF",
     borderRadius: 10,
   },
-  pageBtnText: {
-    color: "#fff",
-    fontWeight: "600",
+  pageBtnDisabled: {
+    backgroundColor: "#ccc", // 비활성 배경색
+    opacity: 0.5,
   },
-  pageText: { 
-    marginHorizontal: 25, 
+  pageBtnText: { 
+    color: "#fff", 
+    fontWeight: "600" 
+  },
+  pageBtnTextDisabled: {
+    color: "#999", // 비활성 텍스트 색상
+  },
+  pageText: {
+    marginHorizontal: 25,
     fontWeight: "bold",
     fontSize: 16,
     color: "#333",
